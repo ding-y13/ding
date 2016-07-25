@@ -75,9 +75,9 @@ Info_Check info_check[MAX_DATA];
 typedef struct{
 	unsigned int UAV_ID;		// 本机ID
 	unsigned int UAV_FRONT_ID;  //前一架飞机的ID
-	char TRACK_FILENAME[30];
+	char TRACK_FILENAME[30];     //
 	char SAVE_FILENAME[30];
-	unsigned int READ_MODE;
+	unsigned int READ_MODE;    //
 	//char FFDATA_PATH[300];		// 飞行脚本路径
 	PID_PARA PID_PARAS;			// 飞行PID控制参数
 }FFCONFIG;
