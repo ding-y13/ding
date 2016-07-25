@@ -46,14 +46,13 @@
 #include <pthread.h>
 
 #define BUFLEN 1000
-#define N_RIGIDBODY 3
+#define N_RIGIDBODY 4
 #define TRAJ_GENERATOR_TIME 3000   	// 3s
 #define POS_CAPTURE_TIME	1	   	// 1ms,1000fps
 #define PID_CTRL_TIME  	 	30		// 30ms,33fps
 #define MAX_RB_NUMBER       5		
 //#define TGTID				2		// 目标刚体编号
 //#define CTRL_STICK_ID       1		// 控制棒刚体编号
-#define UAV_FRONT_ID		0		// 前一架飞机编号
 
 typedef struct{
 	float P;		// P参数
@@ -72,12 +71,14 @@ typedef struct{
 	}Info_Check;
 
 Info_Check info_check[MAX_DATA];	
+
 typedef struct{
-	unsigned int ID;			// 本机ID
-	char LOCAL_IP[16];			// 本机IP
-	char MCAST_IP[16];			// 多播IP
-	char MCAST_PORT[5];			// 多播端口
-	char FFDATA_PATH[300];		// 飞行脚本路径
+	unsigned int UAV_ID;		// 本机ID
+	unsigned int UAV_FRONT_ID;  //前一架飞机的ID
+	char TRACK_FILENAME[30];
+	char SAVE_FILENAME[30];
+	unsigned int READ_MODE;
+	//char FFDATA_PATH[300];		// 飞行脚本路径
 	PID_PARA PID_PARAS;			// 飞行PID控制参数
 }FFCONFIG;
 
@@ -95,8 +96,14 @@ typedef struct _RigidBodyData {
    float d;
 }RigidBodyData_t;
 
-
+unsigned int UAV_FRONT_ID;				// 前一架飞机编号
+unsigned int tgtID;
+char *trackFilename;
+char *saveFilename;
+unsigned int readMode;
+PID_PARA PID_para;
 int Info_Check_Number = 0;
+
 RigidBodyData_t PositionBuf[MAX_DATA];
 int PositionBufNumber = 0;
 typedef struct _OptitrackData {
@@ -264,7 +271,7 @@ void EmptyQueue(QUEUE *Queue)
 	Queue->rear = 0;
 	Queue->front = Queue->rear;
 	pthread_mutex_lock( & Objmtx );//上锁
-	ObjRigidBody.x = 0.5;
+	ObjRigidBody.x = 1;
 	ObjRigidBody.y = 0;
 	ObjRigidBody.z = 1;
 	printf("initialize the position data!\n");
@@ -679,10 +686,12 @@ void timer_thread(union sigval v)
 				ObjRigidBody = PositionBuf[ Counter];
 				Counter ++ ;
 			}
-			else
+			else if(readMode==1)
 			{
-				//ObjRigidBody = PositionBuf[Counter-1];
-				//Counter = 0;
+				ObjRigidBody = PositionBuf[Counter-1];
+			}
+			else if(readMode==2)
+			{
 				ObjRigidBody = PositionBuf[0];
 				Counter = 0;
 			}
@@ -805,9 +814,9 @@ static void* PIDCtrlPthread(void* arg)
 	
 	static double Xout = 0, Yout = 0, Zout = 0, YawOut = 0;					//PID控制量输出值
 	
-	double X_P = 0.07, X_I = 0.02, X_D = 0.015;						//x轴PID参数调试
-	double Y_P = 0.07, Y_I = 0.02, Y_D = 0.015;						//y轴PID参数调试
-	double Z_P = 0.07, Z_I = 0.02, Z_D = 0.015;						//z轴PID参数调试
+	double X_P = PID_para.P, X_I = PID_para.I, X_D = PID_para.D;						//x轴PID参数调试
+	double Y_P = PID_para.P, Y_I = PID_para.I, Y_D = PID_para.D;						//y轴PID参数调试
+	double Z_P = PID_para.P, Z_I = PID_para.I, Z_D = PID_para.D;						//z轴PID参数调试
 	double Yaw_P = 0.0, Yaw_I = 1/DBL_MAX, Yaw_D = 0.0;			//航向PID参数调试，主要是保证控制的X,Y,Z均与optitrack的X,Y,Z参照相同
 	
 	int s = 0;
@@ -818,7 +827,7 @@ static void* PIDCtrlPthread(void* arg)
 	OptitrackData_t TmpOptiData;
 	flight_control_OptiTrackData optitrack_data;
 	//unsigned int tgtID = ffconf.ID;
-	unsigned int tgtID = 1;
+
 	/*	
 	X_P = Y_P = Z_P = ffconf.PID_PARAS.P;
 	X_I = Y_I = Z_I = ffconf.PID_PARAS.I;
@@ -1175,6 +1184,47 @@ static void* PIDCtrlPthread(void* arg)
 	}
 	return (void *)0;
 }
+
+void PrintConf(FFCONFIG* conf)
+{
+	printf("===========================\n");
+	printf("UAV_ID=%d\n",conf->UAV_ID);
+	printf("UAV_FRONT_ID=%d\n",conf->UAV_FRONT_ID);
+	printf("TRACK_FILENAME=%s\n",conf->TRACK_FILENAME);
+    printf("SAVE_FILENAME=%s\n",conf->SAVE_FILENAME);
+	printf("READ_MODE=%d\n",conf->READ_MODE);
+	//printf("FFDATA_PATH=%s\n",conf->FFDATA_PATH);
+	printf("P=%f\n",conf->PID_PARAS.P);
+	printf("I=%f\n",conf->PID_PARAS.I);
+	printf("D=%f\n",conf->PID_PARAS.D);
+	printf("===========================\n");
+}
+
+int LoadConfFile(char* argv,FFCONFIG* conf)
+{
+	FILE *fp;
+	if((fp = fopen(argv,"r")) == NULL)
+	{
+		return -1;
+	}
+	
+	fscanf(fp,"UAV_ID=%d\n",&conf->UAV_ID);
+	fscanf(fp,"UAV_FRONT_ID=%d\n",&conf->UAV_FRONT_ID);
+	fscanf(fp,"TRACK_FILENAME=%s\n",conf->TRACK_FILENAME);
+	fscanf(fp,"SAVE_FILENAME=%s\n",conf->SAVE_FILENAME);
+	fscanf(fp,"READ_MODE=%d\n",&conf->READ_MODE);
+	//fscanf(fp,"FFDATA_PATH=%s\n",conf->FFDATA_PATH);
+	fscanf(fp,"P=%f\n",&conf->PID_PARAS.P);
+	fscanf(fp,"I=%f\n",&conf->PID_PARAS.I);
+	fscanf(fp,"D=%f\n",&conf->PID_PARAS.D);
+	
+	fclose(fp);	
+	
+	PrintConf(conf);
+	
+	return 0;
+}
+
 /* #if 0
 void PrintConf(FFCONFIG* conf)
 {
@@ -1292,7 +1342,7 @@ int read_track()
 {
 	FILE *fp;
 	float tid,tx,ty,tz,ta,tb,tc,td;
-	fp = fopen("values.txt","r");
+	fp = fopen(trackFilename,"r");
 	if(PositionBuf==NULL)
 	{
 		printf("can not make peace\n");
@@ -1323,7 +1373,7 @@ int save_info()
 {
 	FILE *fp;
 	int counter = 0;
-	fp = fopen("ls_data.txt","w");
+	fp = fopen(saveFilename,"w");
 	if(info_check==NULL)
 	{
 		printf("can not make peace\n");
@@ -1360,20 +1410,26 @@ int main(int argc, char **argv)
 		return -1;
 	}
 	 */
-	/*if(argc != 2)
+	if(argc != 2)
 	{
 		printf("Usage: ./bridge_uav_P2P_PID ffsetting.conf\n");
 		perror("Usage Error"); 
-		exit(-1);
-	}	*/
+	}	
 
-	/* // 导入配置文件
-	if(LoadConfFile(argv[1],&ffconf)!=0)
+	char *filename="ffsetting.conf";
+	// 导入配置文件
+	if(LoadConfFile(filename,&ffconf)!=0)
 	{
 		perror("ffsetting.conf File Open Error"); 
 		exit(-2);
 	}	
-	 */
+	
+	tgtID = ffconf.UAV_ID;
+	UAV_FRONT_ID= ffconf.UAV_FRONT_ID;
+	trackFilename = ffconf.TRACK_FILENAME;
+	saveFilename = ffconf.SAVE_FILENAME;
+	readMode = ffconf.READ_MODE;
+	PID_para = ffconf.PID_PARAS;
 	pthread_t posCapturerThread;   	 // 姿态采集线程
 	pthread_t trjGeneratorThread;	 // 轨迹生成线程
 	pthread_t flightCtrlThread;	 	 // 飞行控制线程
@@ -1437,7 +1493,7 @@ int main(int argc, char **argv)
 	 printf("P2P control start!\n");
 	 	// 初始化PID控制线程
  	pthread_mutex_lock( & Objmtx );//上锁
-	ObjRigidBody.x = 0.5;
+	ObjRigidBody.x =1;
 	ObjRigidBody.y = 0;
 	ObjRigidBody.z = 1;
 	printf("initialize the position data!\n");
